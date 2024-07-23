@@ -1,0 +1,124 @@
+#catdoor_final.py
+#written by Gustav Wagner (benjamingustav.wagner@sjsu.edu)
+
+import utime, os
+from machine import Pin
+import hc_sr04_edushields
+from mfrc522 import MFRC522
+
+#define pin numbers for Ultrasonic Sensors
+US1_TRIG_PIN = 0
+US1_ECHO_PIN = 1
+US2_TRIG_PIN = 2
+US2_ECHO_PIN = 3
+
+#define pin numbers for RFID Scanner Module
+RFID_MISO = 4
+RFID_SCA = 5
+RFID_SCK = 6
+RFID_MOSI = 7
+RFID_RST = 22
+
+#define pin numbers for Stepper Motor Control
+MOT1_IN1 = 8
+MOT1_IN2 = 9
+MOT1_IN3 = 10
+MOT1_IN4 = 11
+MOT2_IN1 = 12
+MOT2_IN2 = 13
+MOT2_IN3 = 14
+MOT2_IN4 = 15
+
+#define RFID reader object
+reader = MFRC522(spi_id=0,sck=RFID_SCK,miso=RFID_MISO,mosi=RFID_MOSI,cs=RFID_SCA,rst=RFID_RST)
+
+#Define the pin objects for the stepper motors
+STEPPER_1_PINS = [Pin(MOT1_IN1, Pin.OUT), Pin(MOT1_IN2, Pin.OUT), Pin(MOT1_IN3, Pin.OUT), Pin(MOT1_IN4, Pin.OUT)]
+STEPPER_2_PINS = [Pin(MOT2_IN1, Pin.OUT), Pin(MOT2_IN2, Pin.OUT), Pin(MOT2_IN3, Pin.OUT), Pin(MOT2_IN4, Pin.OUT)]
+
+#define important variables that user may want to change/update according to their needs
+max_detection_range_cm = 10
+TAG_ID = 327877104
+time_to_open = 6 #time the door takes to open, in seconds
+steps_per_rotation = 2000
+steps_to_move = 0.8 * steps_per_rotation #move 80% of a full rotation
+stepper_delay = time_to_open / steps_per_rotation
+
+#define important functions that are frequently called by the mechatronic system
+
+#primary searching function of program. searches for object using two ultrasonic sensors. if pet is detected at US1 (indoors), the door opens automatically.
+#if the pet is detected at US2 (outdoors), initiates search for RFID tag.
+def us_scan():
+    
+    US1 = hc_sr04_edushields.HCSR04(US1_TRIG_PIN, US1_ECHO_PIN)
+    US2 = hc_sr04_edushields.HCSR04(US2_TRIG_PIN, US2_ECHO_PIN)
+    
+    if US1.range_cm() > 0 and US1.range_cm() < max_detection_range_cm:
+        print("US1 DETECTION: OPENING DOOR")
+        #use this block of code to control the door opening sequence
+        door_control(1, -1) #open door
+        utime.sleep(3) #keep door open for a moment
+        door_control(-1, 1) #close door
+    if US2.range_cm() > 0 and US2.range_cm() < max_detection_range_cm:
+        print("US2 DETECTION: SEARCHING FOR TAG")
+        rfid_scan()
+    
+#use RFID sensor to search for the pet's tag. if the pet is found, initiates door sequence. after the door has been closed again,
+#wait for a moment to avoid double-checking and re-opening the door
+def rfid_scan():
+    reader.init()
+    (stat, tag_type) = reader.request(reader.REQIDL)
+    for i in range(1):
+        if stat == reader.OK:
+            (stat, uid) = reader.SelectTagSN()
+            if stat == reader.OK:
+                card = int.from_bytes(bytes(uid),"little",False)
+                print(card)
+                if card == TAG_ID:
+                    print("PET FOUND WITH TAG ID #", card, ": OPENING DOOR")
+                    #use this block of code to control the door opening sequence
+                    door_control(1, -1) #open door
+                    utime.sleep(3) #keep door open for a moment
+                    print("CLOSING DOOR")
+                    door_control(-1, 1) #close door
+                
+        utime.sleep(0.1)
+    print("exiting rfid_scan()")
+    #utime.sleep(2) #wait for a few seconds to avoid a double-count when the pet goes back inside
+
+
+#unipolar stepper motor control function that is called when the program wants to open the door
+def door_control(DIRECTION_STEPPER_1, DIRECTION_STEPPER_2):
+    global STEP_INDEX_1 #define global varibles for the stepper motors to keep track 
+    global STEP_INDEX_2
+    
+    STEP_INDEX_1 = 0 #set stepper motor indices to 0 to initialize the function
+    STEP_INDEX_2 = 0
+    
+    STEP_ORDER = [
+    [1, 0, 0, 1],
+    [1, 1, 0, 0],
+    [0, 1, 1, 0],
+    [0, 0, 1, 1],
+    ] #order in which to pulse stepper motor coils       
+    # Loop through the specified number of steps in the specified direction
+    for i in range(steps_to_move):
+        
+        # Add the specified direction to the current step index to get the new step index
+        STEP_INDEX_1 = (STEP_INDEX_1 + DIRECTION_STEPPER_1) % len(STEP_ORDER)
+        STEP_INDEX_2 = (STEP_INDEX_2 + DIRECTION_STEPPER_2) % len(STEP_ORDER)
+        # Loop through each pin in the motor
+        for pin_index in range(len(STEPPER_1_PINS)):
+            # Get the value for this pin from the step sequence using the current step index
+            pin_value_1 = STEP_ORDER[STEP_INDEX_1][pin_index]
+            pin_value_2 = STEP_ORDER[STEP_INDEX_2][pin_index]
+            # Set the pin to this value
+            STEPPER_1_PINS[pin_index].value(pin_value_1)
+            STEPPER_2_PINS[pin_index].value(pin_value_2)
+        # Delay for the specified amount of time before taking the next step
+        utime.sleep(stepper_delay)
+
+#main loop of the function
+while True:
+    us_scan()
+    utime.sleep(0.1)
